@@ -4,7 +4,6 @@ import multer from "multer";
 import { GoogleGenAI, Type } from "@google/genai";
 import * as XLSX from "xlsx";
 import path from "path";
-import fs from "fs";
 import cors from "cors";
 import dotenv from "dotenv";
 
@@ -13,140 +12,138 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Configure Multer for file uploads (using stable 1.4.x version)
+// Vercel Hobby limit is 4.5MB. We set a safe limit here.
+const MAX_FILE_SIZE = 4 * 1024 * 1024; 
+
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 15 * 1024 * 1024 } // Increased to 15MB
+  limits: { fileSize: MAX_FILE_SIZE }
 });
 
 app.use(cors());
-app.use(express.json({ limit: '15mb' }));
-app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+// Vercel body limits
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-// Gemini AI Setup
 const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 app.post("/api/convert", (req, res, next) => {
-  console.log(`[${new Date().toISOString()}] Received POST request to /api/convert`);
+  console.log(`[${new Date().toISOString()}] Request received`);
   next();
-}, upload.single("pdf"), async (req, res) => {
+}, (req, res, next) => {
+  upload.single("pdf")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: "El archivo es demasiado grande. El límite es 4MB para el plan gratuito de Vercel." });
+      }
+      return res.status(400).json({ error: `Error de carga: ${err.message}` });
+    } else if (err) {
+      return res.status(500).json({ error: `Error interno: ${err.message}` });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
-    console.log("Multer finished processing");
     if (!req.file) {
-      console.error("No file in request");
-      return res.status(400).json({ error: "No se ha subido ningún archivo" });
+      return res.status(400).json({ error: "No se ha recibido ningún archivo PDF." });
     }
 
-    console.log(`Processing file: ${req.file.originalname} (${req.file.size} bytes)`);
-    const pdfBuffer = req.file.buffer;
-    const base64Pdf = pdfBuffer.toString("base64");
+    console.log(`Processing: ${req.file.originalname} (${req.file.size} bytes)`);
+    
+    // Check if API KEY is present
+    if (!process.env.GEMINI_API_KEY) {
+      console.error("GEMINI_API_KEY is missing");
+      return res.status(500).json({ error: "Configuración incompleta: Falta la clave de API de Gemini." });
+    }
 
-    const model = "gemini-3-flash-preview";
+    const base64Pdf = req.file.buffer.toString("base64");
+    const modelName = "gemini-3-flash-preview";
     
     const prompt = `
       Extract all tables from the provided PDF. 
       Return the data as a JSON object with three keys:
-      1. "best_effort": The most accurate representation of the tables, merging headers and rows correctly.
-      2. "raw_data": A more literal extraction, keeping all cells even if they seem like noise.
-      3. "structured_view": A highly structured version optimized for data analysis (e.g., ensuring consistent columns).
+      1. "best_effort": Most accurate representation.
+      2. "raw_data": Literal extraction.
+      3. "structured_view": Optimized for analysis.
 
-      Each key should contain an array of tables. Each table should be an array of arrays (rows).
-      Example format:
-      {
-        "best_effort": [ [["Col1", "Col2"], ["Val1", "Val2"]] ],
-        "raw_data": [...],
-        "structured_view": [...]
-      }
-      If no tables are found, return empty arrays for each key.
+      Each key should be an array of tables (array of arrays of strings).
+      If no tables found, return empty arrays.
     `;
 
-    console.log("Sending request to Gemini...");
-    const result = await genAI.models.generateContent({
-      model: model,
-      contents: {
-        parts: [
-          { text: prompt },
-          {
-            inlineData: {
-              mimeType: "application/pdf",
-              data: base64Pdf
+    console.log("Calling Gemini...");
+    
+    // Set a timeout for the Gemini call to avoid Vercel killing the function blindly
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 9000); // 9s timeout for Gemini
+
+    try {
+      const result = await genAI.models.generateContent({
+        model: modelName,
+        contents: {
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: "application/pdf",
+                data: base64Pdf
+              }
             }
+          ]
+        },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              best_effort: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.STRING } } } },
+              raw_data: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.STRING } } } },
+              structured_view: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.STRING } } } }
+            },
+            required: ["best_effort", "raw_data", "structured_view"]
           }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            best_effort: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                }
-              }
-            },
-            raw_data: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                }
-              }
-            },
-            structured_view: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                }
-              }
-            }
-          },
-          required: ["best_effort", "raw_data", "structured_view"]
         }
-      }
-    });
-
-    console.log("Gemini response received");
-    const extraction = JSON.parse(result.text || "{}");
-
-    // Create Excel workbook
-    const wb = XLSX.utils.book_new();
-
-    const addSheet = (data: string[][][], sheetName: string) => {
-      if (!data || data.length === 0) return;
-      // Combine multiple tables into one sheet with spacing
-      const combinedRows: any[] = [];
-      data.forEach((table, index) => {
-        if (index > 0) combinedRows.push([]); // Add empty row between tables
-        table.forEach(row => combinedRows.push(row));
       });
-      const ws = XLSX.utils.aoa_to_sheet(combinedRows);
-      XLSX.utils.book_append_sheet(wb, ws, sheetName);
-    };
 
-    addSheet(extraction.best_effort, "Mejor Resultado");
-    addSheet(extraction.structured_view, "Vista Estructurada");
-    addSheet(extraction.raw_data, "Datos Brutos");
+      clearTimeout(timeoutId);
+      console.log("Gemini success");
 
-    const excelBuffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      const extraction = JSON.parse(result.text || "{}");
+      const wb = XLSX.utils.book_new();
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", "attachment; filename=converted_tables.xlsx");
-    res.send(excelBuffer);
+      const addSheet = (data: string[][][], sheetName: string) => {
+        if (!data || data.length === 0) return;
+        const combinedRows: any[] = [];
+        data.forEach((table, index) => {
+          if (index > 0) combinedRows.push([]);
+          table.forEach(row => combinedRows.push(row));
+        });
+        const ws = XLSX.utils.aoa_to_sheet(combinedRows);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      };
+
+      addSheet(extraction.best_effort, "Mejor Resultado");
+      addSheet(extraction.structured_view, "Vista Estructurada");
+      addSheet(extraction.raw_data, "Datos Brutos");
+
+      const excelBuffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="converted_${Date.now()}.xlsx"`);
+      res.send(excelBuffer);
+      console.log("Response sent");
+
+    } catch (geminiErr: any) {
+      clearTimeout(timeoutId);
+      if (geminiErr.name === 'AbortError') {
+        return res.status(504).json({ error: "La IA tardó demasiado en responder. Prueba con un PDF más pequeño." });
+      }
+      throw geminiErr;
+    }
 
   } catch (error: any) {
-    console.error("Conversion error:", error);
-    res.status(500).json({ error: error.message || "Failed to convert PDF" });
+    console.error("Fatal error:", error);
+    res.status(500).json({ error: error.message || "Error interno del servidor" });
   }
 });
 
