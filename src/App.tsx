@@ -82,17 +82,18 @@ export default function App() {
       });
 
       if (!response.ok) {
+        const text = await response.text();
         let errorMessage = 'Error en la conversión';
         try {
-          const errorData = await response.json();
+          const errorData = JSON.parse(text);
           errorMessage = errorData.error || errorMessage;
         } catch (e) {
-          // If not JSON, try to get text
-          const text = await response.text();
           if (text.includes('The page could not be found')) {
-            errorMessage = 'El servidor no pudo encontrar la ruta de conversión. Por favor, intenta de nuevo.';
+            errorMessage = 'El servidor no pudo encontrar la ruta de conversión. Verifica la configuración de Vercel.';
+          } else if (response.status === 504) {
+            errorMessage = 'Tiempo de espera agotado (Vercel Timeout). El plan gratuito de Vercel limita las funciones a 10s.';
           } else {
-            errorMessage = `Error del servidor: ${response.status} ${response.statusText}`;
+            errorMessage = `Error ${response.status}: ${text.substring(0, 100)}`;
           }
         }
         throw new Error(errorMessage);
