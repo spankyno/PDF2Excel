@@ -1,0 +1,5 @@
+{
+  "name": "PDF Table to Excel Converter",
+  "description": "Convert PDF tables to Excel spreadsheets using AI-powered extraction.",
+  "requestFramePermissions": []
+}
