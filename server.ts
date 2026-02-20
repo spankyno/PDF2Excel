@@ -13,29 +13,35 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Configure Multer for file uploads
+// Configure Multer for file uploads (using stable 1.4.x version)
+const storage = multer.memoryStorage();
 const upload = multer({ 
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+  storage: storage,
+  limits: { fileSize: 15 * 1024 * 1024 } // Increased to 15MB
 });
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // Gemini AI Setup
 const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-app.post("/api/convert", upload.single("pdf"), async (req, res) => {
+app.post("/api/convert", (req, res, next) => {
+  console.log(`[${new Date().toISOString()}] Received POST request to /api/convert`);
+  next();
+}, upload.single("pdf"), async (req, res) => {
   try {
+    console.log("Multer finished processing");
     if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+      console.error("No file in request");
+      return res.status(400).json({ error: "No se ha subido ningún archivo" });
     }
 
+    console.log(`Processing file: ${req.file.originalname} (${req.file.size} bytes)`);
     const pdfBuffer = req.file.buffer;
     const base64Pdf = pdfBuffer.toString("base64");
 
-    // We'll use Gemini to extract tables. 
-    // To satisfy the "multiple techniques" requirement, we'll ask Gemini for 3 different extraction styles.
     const model = "gemini-3-flash-preview";
     
     const prompt = `
@@ -52,23 +58,23 @@ app.post("/api/convert", upload.single("pdf"), async (req, res) => {
         "raw_data": [...],
         "structured_view": [...]
       }
+      If no tables are found, return empty arrays for each key.
     `;
 
+    console.log("Sending request to Gemini...");
     const result = await genAI.models.generateContent({
       model: model,
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: "application/pdf",
-                data: base64Pdf
-              }
+      contents: {
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              mimeType: "application/pdf",
+              data: base64Pdf
             }
-          ]
-        }
-      ],
+          }
+        ]
+      },
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -110,6 +116,7 @@ app.post("/api/convert", upload.single("pdf"), async (req, res) => {
       }
     });
 
+    console.log("Gemini response received");
     const extraction = JSON.parse(result.text || "{}");
 
     // Create Excel workbook

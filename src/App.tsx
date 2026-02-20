@@ -23,6 +23,7 @@ export default function App() {
   const [status, setStatus] = useState<'idle' | 'uploading' | 'processing' | 'success' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -39,8 +40,19 @@ export default function App() {
     }
   };
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const selectedFile = e.dataTransfer.files[0];
       if (selectedFile.type !== 'application/pdf') {
@@ -70,8 +82,20 @@ export default function App() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Error en la conversión');
+        let errorMessage = 'Error en la conversión';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch (e) {
+          // If not JSON, try to get text
+          const text = await response.text();
+          if (text.includes('The page could not be found')) {
+            errorMessage = 'El servidor no pudo encontrar la ruta de conversión. Por favor, intenta de nuevo.';
+          } else {
+            errorMessage = `Error del servidor: ${response.status} ${response.statusText}`;
+          }
+        }
+        throw new Error(errorMessage);
       }
 
       const blob = await response.blob();
@@ -132,8 +156,10 @@ export default function App() {
               relative border-2 border-dashed rounded-3xl p-12 text-center transition-all duration-300
               ${status === 'processing' ? 'border-emerald-200 bg-emerald-50/30' : 'border-gray-300 bg-white hover:border-emerald-500 hover:bg-emerald-50/10'}
               ${file ? 'border-emerald-500 bg-emerald-50/10' : ''}
+              ${isDragging ? 'border-emerald-600 bg-emerald-100 ring-4 ring-emerald-100 scale-[1.02]' : ''}
             `}
-            onDragOver={(e) => e.preventDefault()}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
             <input 
