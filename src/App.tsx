@@ -27,6 +27,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
 import { User as SupabaseUser } from '@supabase/supabase-js';
+import Cookies from 'js-cookie';
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
@@ -34,7 +35,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(true); // Default to dark as requested
+  const [isDarkMode, setIsDarkMode] = useState(true); 
   const [copied, setCopied] = useState(false);
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -42,12 +43,24 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
+  const [showCookieConsent, setShowCookieConsent] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const email = "blog.cottage627@passinbox.com";
 
   useEffect(() => {
+    // Check cookie consent
+    const consent = Cookies.get('cookie_consent');
+    if (!consent) {
+      setShowCookieConsent(true);
+    }
+
+    // Check dark mode preference
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) {
+      setIsDarkMode(savedTheme === 'dark');
+    }
     // Check current session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -64,12 +77,64 @@ export default function App() {
   useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
-      document.documentElement.style.colorScheme = 'dark';
+      localStorage.setItem('theme', 'dark');
     } else {
       document.documentElement.classList.remove('dark');
-      document.documentElement.style.colorScheme = 'light';
+      localStorage.setItem('theme', 'light');
     }
   }, [isDarkMode]);
+
+  const checkUsageLimit = () => {
+    if (user) return true; // Registered users have no limit
+
+    const uploadsStr = Cookies.get('pdf_uploads');
+    const now = Date.now();
+    const thirtyDaysInMs = 30 * 24 * 60 * 60 * 1000;
+
+    let uploads: number[] = [];
+    if (uploadsStr) {
+      try {
+        uploads = JSON.parse(uploadsStr);
+      } catch (e) {
+        uploads = [];
+      }
+    }
+
+    // Filter uploads from the last 30 days
+    const recentUploads = uploads.filter(t => now - t < thirtyDaysInMs);
+
+    if (recentUploads.length >= 3) {
+      return false;
+    }
+
+    return true;
+  };
+
+  const recordUpload = () => {
+    if (user) return;
+
+    const uploadsStr = Cookies.get('pdf_uploads');
+    const now = Date.now();
+    let uploads: number[] = [];
+    
+    if (uploadsStr) {
+      try {
+        uploads = JSON.parse(uploadsStr);
+      } catch (e) {
+        uploads = [];
+      }
+    }
+
+    uploads.push(now);
+    // Keep only last 10 to avoid huge cookies, though we only care about 3
+    const recentUploads = uploads.slice(-10);
+    Cookies.set('pdf_uploads', JSON.stringify(recentUploads), { expires: 30 });
+  };
+
+  const acceptCookies = () => {
+    Cookies.set('cookie_consent', 'true', { expires: 365 });
+    setShowCookieConsent(false);
+  };
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -152,6 +217,12 @@ export default function App() {
   const handleConvert = async () => {
     if (!file) return;
 
+    if (!checkUsageLimit()) {
+      setError('Has alcanzado el límite de 3 archivos en 30 días para usuarios no registrados. Por favor, regístrate para continuar sin límites.');
+      setStatus('error');
+      return;
+    }
+
     setStatus('processing');
     setError(null);
 
@@ -186,6 +257,7 @@ export default function App() {
       const url = window.URL.createObjectURL(blob);
       setDownloadUrl(url);
       setStatus('success');
+      recordUpload();
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Ocurrió un error inesperado.');
@@ -534,6 +606,33 @@ export default function App() {
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Cookie Consent Banner */}
+      <AnimatePresence>
+        {showCookieConsent && (
+          <motion.div 
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            className="fixed bottom-0 left-0 right-0 z-40 p-4"
+          >
+            <div className="max-w-4xl mx-auto bg-white dark:bg-[#1E293B] border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="text-sm text-gray-600 dark:text-gray-400">
+                <p>
+                  Utilizamos cookies para mejorar tu experiencia y gestionar los límites de uso. 
+                  Al continuar navegando, aceptas nuestra política de cookies.
+                </p>
+              </div>
+              <button 
+                onClick={acceptCookies}
+                className="px-6 py-2 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all whitespace-nowrap"
+              >
+                Entendido
+              </button>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>
