@@ -18,9 +18,15 @@ import {
   Copy,
   Check,
   Sun,
-  Moon
+  Moon,
+  LogIn,
+  LogOut,
+  User,
+  PlusCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { supabase } from './lib/supabase';
+import { User as SupabaseUser } from '@supabase/supabase-js';
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
@@ -28,19 +34,74 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true); // Default to dark as requested
   const [copied, setCopied] = useState(false);
+  const [user, setUser] = useState<SupabaseUser | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(false);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const email = "blog.cottage627@passinbox.com";
 
   useEffect(() => {
+    // Check current session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
+      document.documentElement.style.colorScheme = 'dark';
     } else {
       document.documentElement.classList.remove('dark');
+      document.documentElement.style.colorScheme = 'light';
     }
   }, [isDarkMode]);
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setError(null);
+
+    try {
+      if (isSignUp) {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        alert('Revisa tu correo para confirmar el registro.');
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+      }
+      setShowAuthModal(false);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(email);
@@ -144,39 +205,54 @@ export default function App() {
             <span className="font-bold text-xl tracking-tight">PDF2Excel</span>
           </div>
           
-          <div className="flex items-center gap-4 sm:gap-8">
-            <nav className="hidden sm:flex items-center gap-6 text-sm font-medium">
+          <div className="flex items-center gap-4 sm:gap-6">
+            <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
               <a href="https://aitorblog.infinityfreeapp.com" target="_blank" className="text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Blog</a>
-              <div className="relative group">
-                <button 
-                  onClick={copyToClipboard}
-                  className="flex items-center gap-2 text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
-                >
-                  <span className="max-w-[150px] truncate">{email}</span>
-                  {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
-                </button>
-                <AnimatePresence>
-                  {copied && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-[10px] rounded whitespace-nowrap"
-                    >
-                      ¡Copiado!
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+              <a href="https://aitorhub.vercel.app/" target="_blank" className="text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center gap-1">
+                Más apps <PlusCircle className="w-3 h-3" />
+              </a>
+              <button 
+                onClick={copyToClipboard}
+                className="flex items-center gap-2 text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
+                title={email}
+              >
+                {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Mail className="w-4 h-4" />}
+                {copied && <span className="text-[10px] text-emerald-500">Copiado</span>}
+              </button>
             </nav>
 
-            <button 
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              className="p-2 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"
-              aria-label="Toggle dark mode"
-            >
-              {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-            </button>
+            <div className="flex items-center gap-2 border-l border-gray-200 dark:border-gray-700 pl-4">
+              <button 
+                onClick={() => setIsDarkMode(!isDarkMode)}
+                className="p-2 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"
+                aria-label="Toggle dark mode"
+              >
+                {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              </button>
+
+              {user ? (
+                <div className="flex items-center gap-3">
+                  <div className="hidden sm:block text-right">
+                    <p className="text-xs font-medium text-gray-900 dark:text-white truncate max-w-[100px]">{user.email}</p>
+                  </div>
+                  <button 
+                    onClick={handleLogout}
+                    className="p-2 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:text-red-500 dark:hover:text-red-400 transition-all"
+                    title="Cerrar sesión"
+                  >
+                    <LogOut className="w-5 h-5" />
+                  </button>
+                </div>
+              ) : (
+                <button 
+                  onClick={() => setShowAuthModal(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-full text-sm font-bold hover:bg-emerald-700 transition-all"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span className="hidden sm:inline">Acceder</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -386,6 +462,80 @@ export default function App() {
           </div>
         </div>
       </footer>
+      {/* Auth Modal */}
+      <AnimatePresence>
+        {showAuthModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white dark:bg-[#1E293B] w-full max-w-md rounded-3xl p-8 shadow-2xl border border-gray-200 dark:border-gray-800"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold dark:text-white">
+                  {isSignUp ? 'Crear cuenta' : 'Iniciar sesión'}
+                </h2>
+                <button 
+                  onClick={() => setShowAuthModal(false)}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                >
+                  <PlusCircle className="w-6 h-6 rotate-45" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAuth} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+                  <input 
+                    type="email" 
+                    required
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 focus:ring-2 focus:ring-emerald-500 outline-none transition-all dark:text-white"
+                    placeholder="tu@email.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Contraseña</label>
+                  <input 
+                    type="password" 
+                    required
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 focus:ring-2 focus:ring-emerald-500 outline-none transition-all dark:text-white"
+                    placeholder="••••••••"
+                  />
+                </div>
+
+                {error && (
+                  <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4" />
+                    {error}
+                  </div>
+                )}
+
+                <button 
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {authLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : isSignUp ? 'Registrarse' : 'Entrar'}
+                </button>
+              </form>
+
+              <div className="mt-6 text-center">
+                <button 
+                  onClick={() => setIsSignUp(!isSignUp)}
+                  className="text-sm text-emerald-600 dark:text-emerald-400 hover:underline"
+                >
+                  {isSignUp ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
