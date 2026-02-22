@@ -15,7 +15,6 @@ jobs:
 
       - name: Ping Supabase Database
         env:
-          # Esta variable debe existir en los Secrets de este repositorio
           DB_URL: ${{ secrets.SUPABASE_DB_URL_PDF_EXCEL }}
         run: |
           psql "$DB_URL" -c "SELECT 1;"
