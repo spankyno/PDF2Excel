@@ -2,9 +2,8 @@ name: Keep Supabase Alive
 
 on:
   schedule:
-    # Lunes y jueves a las 09:00 UTC → evita gaps >7 días
-    - cron: '0 9 * * 1,4'
-  workflow_dispatch:  # Permite ejecutar manualmente desde la interfaz
+    - cron: '0 9 * * 1,4'   # Lunes y jueves 09:00 UTC
+  workflow_dispatch:
 
 jobs:
   keep-alive:
@@ -27,9 +26,7 @@ jobs:
             exit 1
           fi
 
-          # Consulta principal: SELECT simple
           FULL_URL="$SUPABASE_URL/rest/v1/keep_alive?select=id&limit=1"
-
           echo "Intentando consulta: $FULL_URL"
 
           RESPONSE=$(curl -s -o response.txt -w "%{http_code}" \
@@ -42,25 +39,18 @@ jobs:
 
           if [ "$RESPONSE" = "200" ]; then
             echo "✅ Ping exitoso (código 200)"
-            cat response.txt || echo "(respuesta vacía o [] → normal si no hay filas)"
+            cat response.txt || echo "(respuesta vacía o [] → normal)"
           else
             echo "❌ Falló el ping - código: $RESPONSE"
             echo "Respuesta completa:"
             cat response.txt || echo "(no se recibió body)"
             echo ""
-            echo "Posibles causas:"
-            echo "  - 401/403 → RLS no permite SELECT con anon key"
-            echo "  - 404    → tabla 'keep_alive' no existe"
-            echo "  - 400    → query mal formada"
-            echo "Revisa:"
-            echo "  - Policies en Supabase → keep_alive → SELECT → anon → USING: true"
-            echo "  - Nombre exacto de la tabla (minúsculas, schema public)"
+            echo "Posibles causas: RLS (401/403), tabla no existe (404), clave mala"
             exit 1
           fi
 
-          # Llamada opcional extra (aprox. 50% de las veces) para más "actividad"
           if [ $(( RANDOM % 2 )) -eq 0 ]; then
-            echo "📊 Ejecutando llamada adicional (count)..."
+            echo "📊 Llamada adicional (count)..."
             curl -s -o /dev/null \
               "$SUPABASE_URL/rest/v1/keep_alive?select=count(*)" \
               -H "apikey: $SUPABASE_ANON_KEY" \
@@ -71,4 +61,8 @@ jobs:
         if: always()
         run: |
           echo "📝 Resumen de ejecución:"
-          echo "-
+          CURRENT_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+          echo "- Fecha: $CURRENT_TIME UTC"
+          echo "- Trigger: ${{ github.event_name }}"
+          echo "- Estado del ping: ${{ job.status }}"
+          echo "Próxima ejecución programada: siguiente lunes o jueves ~09:00 UTC"
