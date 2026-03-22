@@ -1,33 +1,74 @@
-- name: Ping Supabase (consulta real a tabla)
-  run: |
-    echo "🚀 Ejecutando ping real a la tabla keep_alive..."
-    
-    # URL completa obligatoria
-    FULL_URL="${{ secrets.SUPABASE_URL }}/rest/v1/keep_alive?select=id&limit=1"
-    echo "Intentando: $FULL_URL"
-    
-    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-      "$FULL_URL" \
-      -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
-      -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
-    
-    echo "✅ Código de respuesta: $RESPONSE"
-    
-    if [ "$RESPONSE" != "200" ]; then
-      echo "❌ Error en el ping (código $RESPONSE). Posibles causas:"
-      echo "   - URL mal configurada en secrets.SUPABASE_URL"
-      echo "   - Anon key incorrecta o expirada"
-      echo "   - Tabla 'keep_alive' no existe"
-      echo "   - RLS bloquea SELECT para anon (código 401/403)"
-      echo "   - Revisa logs de Supabase → API → Recent Requests"
-      exit 1
-    fi
-    
-    # Variación opcional
-    if [ $(( RANDOM % 2 )) -eq 0 ]; then
-      echo "📊 Llamada adicional (count)..."
-      curl -s -o /dev/null \
-        "${{ secrets.SUPABASE_URL }}/rest/v1/keep_alive?select=count(*)" \
-        -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
-        -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" || true
-    fi
+name: Keep Supabase Alive
+
+on:
+  schedule:
+    # Lunes y jueves a las 09:00 UTC → evita gaps >7 días
+    - cron: '0 9 * * 1,4'
+  workflow_dispatch:  # Permite ejecutar manualmente desde la interfaz
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ping Supabase (consulta real a tabla keep_alive)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          echo "🚀 Iniciando ping a Supabase..."
+          echo "URL configurada: $SUPABASE_URL"
+
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "❌ ERROR: Faltan secrets (SUPABASE_URL o SUPABASE_ANON_KEY)"
+            exit 1
+          fi
+
+          # Consulta principal: SELECT simple
+          FULL_URL="$SUPABASE_URL/rest/v1/keep_alive?select=id&limit=1"
+
+          echo "Intentando consulta: $FULL_URL"
+
+          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" \
+            "$FULL_URL" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Content-Type: application/json")
+
+          echo "Código HTTP recibido: $RESPONSE"
+
+          if [ "$RESPONSE" = "200" ]; then
+            echo "✅ Ping exitoso (código 200)"
+            cat response.txt || echo "(respuesta vacía o [] → normal si no hay filas)"
+          else
+            echo "❌ Falló el ping - código: $RESPONSE"
+            echo "Respuesta completa:"
+            cat response.txt || echo "(no se recibió body)"
+            echo ""
+            echo "Posibles causas:"
+            echo "  - 401/403 → RLS no permite SELECT con anon key"
+            echo "  - 404    → tabla 'keep_alive' no existe"
+            echo "  - 400    → query mal formada"
+            echo "Revisa:"
+            echo "  - Policies en Supabase → keep_alive → SELECT → anon → USING: true"
+            echo "  - Nombre exacto de la tabla (minúsculas, schema public)"
+            exit 1
+          fi
+
+          # Llamada opcional extra (aprox. 50% de las veces) para más "actividad"
+          if [ $(( RANDOM % 2 )) -eq 0 ]; then
+            echo "📊 Ejecutando llamada adicional (count)..."
+            curl -s -o /dev/null \
+              "$SUPABASE_URL/rest/v1/keep_alive?select=count(*)" \
+              -H "apikey: $SUPABASE_ANON_KEY" \
+              -H "Authorization: Bearer $SUPABASE_ANON_KEY" || true
+          fi
+
+      - name: Registro de ejecución
+        if: always()
+        run: |
+          echo "📝 Resumen de ejecución:"
+          echo "-
