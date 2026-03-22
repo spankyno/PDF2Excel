@@ -1,41 +1,33 @@
-name: Keep Supabase Alive
-
-on:
-  schedule:
-    - cron: "0 9 * * 1,4"   # Lunes y jueves a las 9:00 UTC (2 veces por semana = cero riesgo de 7 días)
-  workflow_dispatch:
-
-jobs:
-  keep-alive:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Ping Supabase (consulta real a tabla)
-        run: |
-          echo "🚀 Ejecutando ping real a la tabla keep_alive..."
-
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-            "${{ secrets.SUPABASE_URL }}/rest/v1/keep_alive?select=id&limit=1" \
-            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
-
-          echo "✅ Código de respuesta: $RESPONSE"
-
-          if [ "$RESPONSE" != "200" ]; then
-            echo "❌ Error en el ping (código $RESPONSE). Revisa permisos RLS."
-            exit 1
-          fi
-
-          # Variación opcional (una de cada 2 veces)
-          if [ $(( RANDOM % 2 )) -eq 0 ]; then
-            curl -s -o /dev/null \
-              "${{ secrets.SUPABASE_URL }}/rest/v1/keep_alive?select=count" \
-              -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
-              -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" || true
-          fi
-
-      - name: Log execution
-        run: |
-          echo "📝 Ejecución completada:"
-          echo "- Fecha: $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "- Próxima ejecución: en ~3-4 días"
+- name: Ping Supabase (consulta real a tabla)
+  run: |
+    echo "🚀 Ejecutando ping real a la tabla keep_alive..."
+    
+    # URL completa obligatoria
+    FULL_URL="${{ secrets.SUPABASE_URL }}/rest/v1/keep_alive?select=id&limit=1"
+    echo "Intentando: $FULL_URL"
+    
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+      "$FULL_URL" \
+      -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+      -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
+    
+    echo "✅ Código de respuesta: $RESPONSE"
+    
+    if [ "$RESPONSE" != "200" ]; then
+      echo "❌ Error en el ping (código $RESPONSE). Posibles causas:"
+      echo "   - URL mal configurada en secrets.SUPABASE_URL"
+      echo "   - Anon key incorrecta o expirada"
+      echo "   - Tabla 'keep_alive' no existe"
+      echo "   - RLS bloquea SELECT para anon (código 401/403)"
+      echo "   - Revisa logs de Supabase → API → Recent Requests"
+      exit 1
+    fi
+    
+    # Variación opcional
+    if [ $(( RANDOM % 2 )) -eq 0 ]; then
+      echo "📊 Llamada adicional (count)..."
+      curl -s -o /dev/null \
+        "${{ secrets.SUPABASE_URL }}/rest/v1/keep_alive?select=count(*)" \
+        -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+        -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" || true
+    fi
