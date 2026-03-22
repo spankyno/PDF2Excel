@@ -2,74 +2,40 @@ name: Keep Supabase Alive
 
 on:
   schedule:
-    # Se ejecuta diariamente a las 00:00 UTC
-    # El script decidirá si realmente ejecutar o no
-    - cron: "0 0 * * *"
+    - cron: "0 9 * * 1,4"   # Lunes y jueves a las 9:00 UTC (2 veces por semana = cero riesgo de 7 días)
   workflow_dispatch:
 
 jobs:
   keep-alive:
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Random execution decision
-        id: random
+      - name: Ping Supabase (consulta real a tabla)
         run: |
-          # Generar número aleatorio entre 1 y 100
-          RANDOM_NUM=$(( RANDOM % 100 + 1 ))
-          
-          # 40% de probabilidad de ejecutarse cada día
-          # Esto resulta en promedio cada 2.5 días
-          if [ $RANDOM_NUM -le 40 ]; then
-            echo "should_run=true" >> $GITHUB_OUTPUT
-            echo "✅ Se ejecutará hoy (número: $RANDOM_NUM)"
-          else
-            echo "should_run=false" >> $GITHUB_OUTPUT
-            echo "⏭️ Saltando ejecución de hoy (número: $RANDOM_NUM)"
-          fi
-          
-          # Guardar para depuración
-          echo "random_num=$RANDOM_NUM" >> $GITHUB_OUTPUT
-          
-      - name: Random hour delay
-        if: steps.random.outputs.should_run == 'true'
-        run: |
-          # Esperar entre 0 y 23 horas (aleatorio)
-          HOURS=$(( RANDOM % 24 ))
-          MINUTES=$(( RANDOM % 60 ))
-          SECONDS=$(( HOURS * 3600 + MINUTES * 60 ))
-          
-          echo "⏰ Esperando $HOURS horas y $MINUTES minutos..."
-          echo "La ejecución será aproximadamente a las $(date -d "+$SECONDS seconds" '+%H:%M:%S') UTC"
-          
-          sleep $SECONDS
-          
-      - name: Ping Supabase REST API
-        if: steps.random.outputs.should_run == 'true'
-        run: |
-          echo "🚀 Ejecutando ping a Supabase..."
-          
-          # Llamada principal
+          echo "🚀 Ejecutando ping real a la tabla keep_alive..."
+
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-            "https://cxbwdplkssimogumszrj.supabase.co/rest/v1/?select=1&limit=1" \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/keep_alive?select=id&limit=1" \
             -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
-          
+
           echo "✅ Código de respuesta: $RESPONSE"
-          
-          # Pequeña variación para simular más actividad
+
+          if [ "$RESPONSE" != "200" ]; then
+            echo "❌ Error en el ping (código $RESPONSE). Revisa permisos RLS."
+            exit 1
+          fi
+
+          # Variación opcional (una de cada 2 veces)
           if [ $(( RANDOM % 2 )) -eq 0 ]; then
-            echo "📊 Ejecutando llamada adicional de verificación..."
             curl -s -o /dev/null \
-              "https://cxbwdplkssimogumszrj.supabase.co/rest/v1/health" \
+              "${{ secrets.SUPABASE_URL }}/rest/v1/keep_alive?select=count" \
               -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
               -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" || true
           fi
-          
+
       - name: Log execution
-        if: steps.random.outputs.should_run == 'true'
         run: |
-          echo "📝 Registro de ejecución:"
+          echo "📝 Ejecución completada:"
           echo "- Fecha: $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "- Número aleatorio: ${{ steps.random.outputs.random_num }}"
-          echo "- Próxima ejecución posible: mañana (sujeto a aleatoriedad)"
+          echo "- Próxima ejecución: en ~3-4 días"
