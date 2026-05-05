@@ -1,68 +1,30 @@
-name: Keep Supabase Alive
+- name: Ping Supabase (heartbeat con INSERT)
+  env:
+    SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+    SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+  run: |
+    echo "🚀 Iniciando heartbeat..."
 
-on:
-  schedule:
-    - cron: '0 9 * * 1,4'   # Lunes y jueves 09:00 UTC
-  workflow_dispatch:
+    # INSERT ligero (más confiable que solo SELECT)
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+      "$SUPABASE_URL/rest/v1/keep_alive" \
+      -X POST \
+      -H "apikey: $SUPABASE_ANON_KEY" \
+      -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+      -H "Content-Type: application/json" \
+      -H "Prefer: return=minimal" \
+      -d '{"status": "alive", "pinged_at": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}')
 
-jobs:
-  keep-alive:
-    runs-on: ubuntu-latest
+    echo "Código HTTP INSERT: $RESPONSE"
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Ping Supabase (consulta real a tabla keep_alive)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          echo "🚀 Iniciando ping a Supabase..."
-          echo "URL configurada: $SUPABASE_URL"
-
-          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
-            echo "❌ ERROR: Faltan secrets (SUPABASE_URL o SUPABASE_ANON_KEY)"
-            exit 1
-          fi
-
-          FULL_URL="$SUPABASE_URL/rest/v1/keep_alive?select=id&limit=1"
-          echo "Intentando consulta: $FULL_URL"
-
-          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" \
-            "$FULL_URL" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
-            -H "Content-Type: application/json")
-
-          echo "Código HTTP recibido: $RESPONSE"
-
-          if [ "$RESPONSE" = "200" ]; then
-            echo "✅ Ping exitoso (código 200)"
-            cat response.txt || echo "(respuesta vacía o [] → normal)"
-          else
-            echo "❌ Falló el ping - código: $RESPONSE"
-            echo "Respuesta completa:"
-            cat response.txt || echo "(no se recibió body)"
-            echo ""
-            echo "Posibles causas: RLS (401/403), tabla no existe (404), clave mala"
-            exit 1
-          fi
-
-          if [ $(( RANDOM % 2 )) -eq 0 ]; then
-            echo "📊 Llamada adicional (count)..."
-            curl -s -o /dev/null \
-              "$SUPABASE_URL/rest/v1/keep_alive?select=count(*)" \
-              -H "apikey: $SUPABASE_ANON_KEY" \
-              -H "Authorization: Bearer $SUPABASE_ANON_KEY" || true
-          fi
-
-      - name: Registro de ejecución
-        if: always()
-        run: |
-          echo "📝 Resumen de ejecución:"
-          CURRENT_TIME=$(date '+%Y-%m-%d %H:%M:%S')
-          echo "- Fecha: $CURRENT_TIME UTC"
-          echo "- Trigger: ${{ github.event_name }}"
-          echo "- Estado del ping: ${{ job.status }}"
-          echo "Próxima ejecución programada: siguiente lunes o jueves ~09:00 UTC"
+    if [ "$RESPONSE" = "201" ] || [ "$RESPONSE" = "200" ]; then
+      echo "✅ INSERT exitoso"
+    else
+      echo "❌ Falló INSERT, intentando SELECT fallback..."
+      # Tu código SELECT actual como backup
+      curl -s -o response.txt -w "%{http_code}" \
+        "$SUPABASE_URL/rest/v1/keep_alive?select=id&limit=1" \
+        -H "apikey: $SUPABASE_ANON_KEY" \
+        -H "Authorization: Bearer $SUPABASE_ANON_KEY" || true
+    fi
+	
