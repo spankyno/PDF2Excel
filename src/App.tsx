@@ -28,6 +28,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
 import { User as SupabaseUser } from '@supabase/supabase-js';
 import Cookies from 'js-cookie';
+import { GoogleGenAI, Type } from "@google/genai";
+import * as XLSX from "xlsx";
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
@@ -226,41 +228,103 @@ export default function App() {
     setStatus('processing');
     setError(null);
 
-    const formData = new FormData();
-    formData.append('pdf', file);
-
     try {
-      const response = await fetch('/api/convert', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        let errorMessage = 'Error en la conversión';
-        try {
-          const errorData = JSON.parse(text);
-          errorMessage = errorData.error || errorMessage;
-        } catch (e) {
-          if (text.includes('The page could not be found')) {
-            errorMessage = 'El servidor no pudo encontrar la ruta de conversión. Verifica la configuración de Vercel.';
-          } else if (response.status === 504) {
-            errorMessage = 'Tiempo de espera agotado (Vercel Timeout). El plan gratuito de Vercel limita las funciones a 10s.';
-          } else {
-            errorMessage = `Error ${response.status}: ${text.substring(0, 100)}`;
-          }
-        }
-        throw new Error(errorMessage);
+      // 1. Initialize Gemini
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("No se ha configurado la clave de API de Gemini. Por favor, asegúrate de que GEMINI_API_KEY esté definida en el entorno.");
       }
 
-      const blob = await response.blob();
+      const ai = new GoogleGenAI({ apiKey });
+      
+      // 2. Read PDF as Base64
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve, reject) => {
+        reader.onload = () => {
+          const base64 = (reader.result as string).split(',')[1];
+          resolve(base64);
+        };
+        reader.onerror = reject;
+      });
+      reader.readAsDataURL(file);
+      const base64Pdf = await base64Promise;
+
+      // 3. Call Gemini (Frontend call bypasses Vercel 10s timeout)
+      const prompt = `
+        Extrae todas las tablas del PDF proporcionado. 
+        Devuelve los datos como un objeto JSON con tres claves:
+        1. "best_effort": Representación más precisa.
+        2. "raw_data": Extracción literal.
+        3. "structured_view": Optimizado para análisis.
+        Cada clave debe ser un array de tablas (array de arrays de strings).
+      `;
+
+      const result = await ai.models.generateContent({
+        model: "gemini-flash-latest",
+        contents: {
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: "application/pdf",
+                data: base64Pdf
+              }
+            }
+          ]
+        },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              best_effort: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.STRING } } } },
+              raw_data: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.STRING } } } },
+              structured_view: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.ARRAY, items: { type: Type.STRING } } } }
+            },
+            required: ["best_effort", "raw_data", "structured_view"]
+          }
+        }
+      });
+
+      if (!result.text) {
+        throw new Error("La IA no devolvió ningún contenido útil.");
+      }
+
+      const extraction = JSON.parse(result.text);
+
+      // 4. Generate Excel in Frontend
+      const wb = XLSX.utils.book_new();
+
+      const addSheet = (data: any[][][], sheetName: string) => {
+        if (!data || data.length === 0) return;
+        const combinedRows: any[] = [];
+        data.forEach((table, index) => {
+          if (index > 0) combinedRows.push([]); // Gap between tables
+          table.forEach(row => combinedRows.push(row));
+        });
+        const ws = XLSX.utils.aoa_to_sheet(combinedRows);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      };
+
+      addSheet(extraction.best_effort, "Mejor Resultado");
+      addSheet(extraction.structured_view, "Vista Estructurada");
+      addSheet(extraction.raw_data, "Datos Brutos");
+
+      const excelArray = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+      const blob = new Blob([excelArray], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      
       const url = window.URL.createObjectURL(blob);
       setDownloadUrl(url);
       setStatus('success');
       recordUpload();
+
     } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Ocurrió un error inesperado.');
+      console.error("Conversion error:", err);
+      let msg = err.message || 'Error en la conversión';
+      if (msg.includes("API key not valid")) {
+        msg = "La clave de API de Gemini no es válida. Por favor, verifica tu configuración en Google AI Studio y en las variables de entorno.";
+      }
+      setError(msg);
       setStatus('error');
     }
   };
