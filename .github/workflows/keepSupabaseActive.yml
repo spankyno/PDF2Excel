@@ -1,4 +1,19 @@
-      - name: Ping Supabase (Heartbeat con tabla dedicada)
+name: Keep Supabase Alive
+
+on:
+  schedule:
+    - cron: '0 9 * * 1,3,5'   # Lunes, Miércoles y Viernes a las 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Ping Supabase (Heartbeat - Tabla dedicada)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -10,15 +25,13 @@
             exit 1
           fi
 
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          
-          # JSON adaptado a la nueva tabla keep_alive_heartbeat
+          # JSON adaptado a la tabla keep_alive_heartbeat
           JSON_BODY='{"status": "alive"}'
 
           echo "📤 JSON que se envía: $JSON_BODY"
-          echo "📍 Usando tabla: keep_alive_heartbeat"
+          echo "📍 Tabla objetivo: keep_alive_heartbeat"
 
-          # INSERT a la nueva tabla
+          # INSERT
           RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
             "$SUPABASE_URL/rest/v1/keep_alive_heartbeat" \
             -X POST \
@@ -32,13 +45,14 @@
           BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*//')
 
           echo "Código HTTP INSERT: $HTTP_CODE"
-          echo "Respuesta: $BODY"
+          echo "Respuesta del servidor: $BODY"
 
           if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
             echo "✅ INSERT exitoso - Actividad registrada correctamente"
           else
-            echo "❌ Falló el INSERT. Probando fallback..."
-            curl -s "$SUPABASE_URL/rest/v1/keep_alive_heartbeat?select=id&limit=1" \
+            echo "⚠️ INSERT falló. Probando SELECT fallback..."
+            curl -s -o response.txt -w "%{http_code}" \
+              "$SUPABASE_URL/rest/v1/keep_alive_heartbeat?select=id&limit=1" \
               -H "apikey: $SUPABASE_ANON_KEY" \
               -H "Authorization: Bearer $SUPABASE_ANON_KEY" || true
           fi
