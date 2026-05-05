@@ -1,58 +1,27 @@
-name: Keep Supabase Alive
+- name: Ping Supabase (Heartbeat con INSERT)
+  env:
+    SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+    SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+  run: |
+    echo "🚀 Iniciando Heartbeat..."
+    
+    TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    JSON_BODY="{\"status\": \"alive\", \"pinged_at\": \"$TIMESTAMP\"}"
+    
+    echo "📤 JSON que se envía: $JSON_BODY"
 
-on:
-  schedule:
-    - cron: '0 9 * * 1,3,5'   # Lunes, Miércoles y Viernes a las 09:00 UTC
-  workflow_dispatch:          # Permite ejecución manual
+    # INSERT con respuesta completa en caso de error
+    RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+      "$SUPABASE_URL/rest/v1/keep_alive" \
+      -X POST \
+      -H "apikey: $SUPABASE_ANON_KEY" \
+      -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+      -H "Content-Type: application/json" \
+      -H "Prefer: return=minimal" \
+      -d "$JSON_BODY")
 
-jobs:
-  keep-alive:
-    runs-on: ubuntu-latest
+    HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+    BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*//')
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Ping Supabase (Heartbeat con INSERT)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          echo "🚀 Iniciando Heartbeat a Supabase..."
-          echo "URL: $SUPABASE_URL"
-
-          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
-            echo "❌ ERROR: Faltan secrets"
-            exit 1
-          fi
-
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          # === INSERT (más confiable) ===
-          echo "📤 Intentando INSERT..."
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-            "$SUPABASE_URL/rest/v1/keep_alive" \
-            -X POST \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d "{\"status\": \"alive\", \"pinged_at\": \"$TIMESTAMP\"}")
-
-          echo "Código HTTP INSERT: $RESPONSE"
-
-          if [ "$RESPONSE" = "201" ] || [ "$RESPONSE" = "200" ]; then
-            echo "✅ INSERT exitoso - Actividad registrada"
-          else
-            echo "⚠️  INSERT falló ($RESPONSE). Probando SELECT fallback..."
-            
-            # Fallback SELECT
-            curl -s -o response.txt -w "%{http_code}" \
-              "$SUPABASE_URL/rest/v1/keep_alive?select=id&limit=1" \
-              -H "apikey: $SUPABASE_ANON_KEY" \
-              -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
-              -H "Content-Type: application/json"
-            
-            HTTP_CODE=$(cat response.txt | tail -1 || echo "0")
-            echo "SELECT HTTP: $HTTP_CODE"
-          fi
+    echo "Código HTTP: $HTTP_CODE"
+    echo "Respuesta: $BODY"
