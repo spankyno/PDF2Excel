@@ -343,7 +343,7 @@ export default function App() {
           
           <div className="flex items-center gap-4 sm:gap-6">
             <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
-              <a href="https://aitorblog.infinityfreeapp.com" target="_blank" className="text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Blog</a>
+              <a href="https://aitorsanchez.pages.dev/" target="_blank" className="text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Blog</a>
               <a href="https://aitorhub.vercel.app/" target="_blank" className="text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center gap-1">
                 Más apps <PlusCircle className="w-3 h-3" />
               </a>
