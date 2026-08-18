@@ -2,7 +2,10 @@ name: Keep Supabase Alive
 
 on:
   schedule:
-    - cron: '0 9 * * 1,3,5'   # Lunes, Miércoles y Viernes a las 09:00 UTC
+    # Todos los días a las 09:00 UTC
+    - cron: '0 9 * * *'
+
+  # Permite ejecutarlo manualmente desde GitHub
   workflow_dispatch:
 
 jobs:
@@ -10,29 +13,79 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
 
-      - name: Ping Supabase (Heartbeat - Tabla dedicada)
+      # ---------------------------------------------------------
+      # 1. Comprobar que los secrets existen
+      # ---------------------------------------------------------
+      - name: Check configuration
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          echo "🚀 Iniciando Heartbeat a Supabase..."
+          echo "🔍 Comprobando configuración..."
 
-          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
-            echo "❌ ERROR: Faltan secrets"
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "❌ Falta SUPABASE_URL"
             exit 1
           fi
 
-          # JSON adaptado a la tabla keep_alive_heartbeat
-          JSON_BODY='{"status": "alive"}'
+          if [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "❌ Falta SUPABASE_ANON_KEY"
+            exit 1
+          fi
 
-          echo "📤 JSON que se envía: $JSON_BODY"
-          echo "📍 Tabla objetivo: keep_alive_heartbeat"
+          echo "✅ Configuración correcta"
 
-          # INSERT
-          RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+
+      # ---------------------------------------------------------
+      # 2. SELECT
+      # Comprueba que Supabase responde correctamente
+      # ---------------------------------------------------------
+      - name: Supabase SELECT
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+
+          echo "📡 Realizando SELECT..."
+
+          HTTP_CODE=$(curl -s \
+            -o response.json \
+            -w "%{http_code}" \
+            "$SUPABASE_URL/rest/v1/keep_alive_heartbeat?select=id&limit=1" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+
+          echo "HTTP: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ SELECT fallido"
+            cat response.json
+            exit 1
+          fi
+
+          echo "✅ SELECT correcto"
+
+
+      # ---------------------------------------------------------
+      # 3. INSERT
+      # Registra actividad real en la base de datos
+      # ---------------------------------------------------------
+      - name: Supabase INSERT heartbeat
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+
+          echo "💓 Registrando heartbeat..."
+
+          JSON_BODY='{
+            "status": "alive"
+          }'
+
+          HTTP_CODE=$(curl -s \
+            -o response.json \
+            -w "%{http_code}" \
             "$SUPABASE_URL/rest/v1/keep_alive_heartbeat" \
             -X POST \
             -H "apikey: $SUPABASE_ANON_KEY" \
@@ -41,18 +94,98 @@ jobs:
             -H "Prefer: return=minimal" \
             -d "$JSON_BODY")
 
-          HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
-          BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*//')
+          echo "HTTP: $HTTP_CODE"
 
-          echo "Código HTTP INSERT: $HTTP_CODE"
-          echo "Respuesta del servidor: $BODY"
-
-          if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ INSERT exitoso - Actividad registrada correctamente"
-          else
-            echo "⚠️ INSERT falló. Probando SELECT fallback..."
-            curl -s -o response.txt -w "%{http_code}" \
-              "$SUPABASE_URL/rest/v1/keep_alive_heartbeat?select=id&limit=1" \
-              -H "apikey: $SUPABASE_ANON_KEY" \
-              -H "Authorization: Bearer $SUPABASE_ANON_KEY" || true
+          if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ INSERT fallido"
+            cat response.json
+            exit 1
           fi
+
+          echo "✅ Heartbeat registrado"
+
+
+      # ---------------------------------------------------------
+      # 4. SELECT posterior
+      # Comprueba que el heartbeat está realmente en la BD
+      # ---------------------------------------------------------
+      - name: Verify heartbeat
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+
+          echo "🔎 Verificando heartbeat..."
+
+          HTTP_CODE=$(curl -s \
+            -o response.json \
+            -w "%{http_code}" \
+            "$SUPABASE_URL/rest/v1/keep_alive_heartbeat?select=id,status,created_at&order=id.desc&limit=1" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+
+          echo "HTTP: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ No se pudo verificar el heartbeat"
+            cat response.json
+            exit 1
+          fi
+
+          echo "Último heartbeat:"
+          cat response.json
+
+          echo ""
+          echo "✅ Verificación correcta"
+
+
+      # ---------------------------------------------------------
+      # 5. Limpieza
+      # Conserva únicamente los últimos 30 días
+      # ---------------------------------------------------------
+      - name: Cleanup old heartbeats
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+
+          echo "🧹 Eliminando heartbeats antiguos..."
+
+          CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+
+          HTTP_CODE=$(curl -s \
+            -o cleanup.json \
+            -w "%{http_code}" \
+            "$SUPABASE_URL/rest/v1/keep_alive_heartbeat?created_at=lt.$CUTOFF" \
+            -X DELETE \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Prefer: return=minimal")
+
+          echo "HTTP: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "204" ] && [ "$HTTP_CODE" != "200" ]; then
+            echo "⚠️ La limpieza no se pudo completar"
+            cat cleanup.json
+          else
+            echo "✅ Limpieza completada"
+          fi
+
+
+      # ---------------------------------------------------------
+      # 6. Resumen
+      # ---------------------------------------------------------
+      - name: Finished
+        run: |
+
+          echo ""
+          echo "========================================"
+          echo "       SUPABASE KEEP-ALIVE OK"
+          echo "========================================"
+          echo "📅 Fecha: $(date -u)"
+          echo "💓 Heartbeat: OK"
+          echo "📡 SELECT: OK"
+          echo "💾 INSERT: OK"
+          echo "🔎 VERIFY: OK"
+          echo "🧹 CLEANUP: OK"
+          echo "========================================"
